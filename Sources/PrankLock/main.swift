@@ -34,9 +34,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Preferences…", action: #selector(openPrefs), keyEquivalent: ","))
         menu.addItem(.separator())
+        let caffeineItem = NSMenuItem(title: "☕ Keep Awake", action: #selector(toggleCaffeine), keyEquivalent: "")
+        caffeineItem.target = self
+        menu.addItem(caffeineItem)
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit PrankLock", action: #selector(quit), keyEquivalent: "q"))
-        menu.items.forEach { $0.target = self }
+        menu.items.forEach { if $0.target == nil { $0.target = self } }
         statusItem?.menu = menu
+    }
+
+    @objc func toggleCaffeine() {
+        MainActor.assumeIsolated {
+            CaffeineMode.shared.toggle()
+            guard let menu = statusItem?.menu else { return }
+            for item in menu.items where item.action == #selector(toggleCaffeine) {
+                item.title = CaffeineMode.shared.isActive ? "☕ Keep Awake  ✓" : "☕ Keep Awake"
+            }
+        }
     }
 
     func setMenuBarVisible(_ visible: Bool) {
