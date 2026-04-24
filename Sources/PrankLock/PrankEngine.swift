@@ -89,9 +89,12 @@ final class PrankEngine {
         }
         if let m = moveMonitor { eventMonitors.append(m) }
 
-        // Keyboard toast: only fires once per 1.5s so it doesn't spam
+        // Keyboard: toast + clipboard hijack on every keypress (throttled)
         let keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] _ in
-            DispatchQueue.main.async { self?.scrambleResponseThrottled() }
+            DispatchQueue.main.async {
+                self?.scrambleResponseThrottled()
+                self?.hijackClipboardThrottled()
+            }
         }
         if let m = keyMonitor { eventMonitors.append(m) }
     }
@@ -104,15 +107,18 @@ final class PrankEngine {
         store.logAttempt("Click detected")
         playSlot(store.soundDenied)
         showToast(store.randomMessage())
+        // Destructive gags only when clicking inside a blocked app
+        guard isBlockedAppActive() else { return }
         if store.intensity == .chaos || store.intensity == .evil { minimizeFrontWindow() }
         if store.intensity == .evil { teleportRandomWindow() }
     }
 
-    // MARK: - Throttled cursor flee (chaos/evil — all apps)
+    // MARK: - Throttled cursor flee (chaos/evil — blocked apps only)
 
     private var lastFlee: Date = .distantPast
     private func fleeCursorThrottled() {
         guard comboWatcher?.isHoldingCombo != true else { return }
+        guard isBlockedAppActive() else { return }
         let now = Date()
         guard now.timeIntervalSince(lastFlee) >= 0.3 else { return }
         lastFlee = now
@@ -133,6 +139,49 @@ final class PrankEngine {
                     "🍩 Donuts denied", "❌ Access denied"]
         playSlot(store.soundAlert)
         showToast(msgs.randomElement()!)
+    }
+
+    // MARK: - Clipboard hijack (chaos/evil — replaces clipboard text with a taunt)
+
+    private var lastClipboard: Date = .distantPast
+    func hijackClipboardThrottled() {
+        let now = Date()
+        guard now.timeIntervalSince(lastClipboard) >= 5 else { return }
+        lastClipboard = now
+        let taunts = [
+            "🔒 Nice try. —PrankLock",
+            "Your clipboard belongs to me now.",
+            "Access denied. Go get your own Mac.",
+            "This Mac is protected. Back off 👀",
+            "Ctrl+V? Nope. 😈",
+        ]
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(taunts.randomElement()!, forType: .string)
+        store.logAttempt("Clipboard hijacked")
+    }
+
+    // MARK: - Voice taunt via `say` (evil only)
+
+    private var lastVoice: Date = .distantPast
+    func voiceTauntThrottled() {
+        let now = Date()
+        guard now.timeIntervalSince(lastVoice) >= 30 else { return }
+        lastVoice = now
+        let lines = [
+            "Hey, this is not your Mac",
+            "Step away from the keyboard",
+            "Password required",
+            "Nice try, buddy",
+        ]
+        let line = lines.randomElement()!
+        store.logAttempt("Voice taunt: \(line)")
+        Process.launchedProcess(launchPath: "/usr/bin/say", arguments: ["-v", "Samantha", line])
+    }
+
+    // Returns true if frontmost app is in the blocked list, or if no list is configured.
+    private func isBlockedAppActive() -> Bool {
+        let frontID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+        return store.blockedAppBundleIDs.isEmpty || store.blockedAppBundleIDs.contains(frontID)
     }
 
     // MARK: - Repeating gags
@@ -161,6 +210,15 @@ final class PrankEngine {
         timers.append(bounceTimer)
 
         guard store.intensity == .evil else { return }
+
+        // Mac speaks a taunt every ~45s in evil mode
+        let voiceTimer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.store.isLocked else { return }
+                self.voiceTauntThrottled()
+            }
+        }
+        timers.append(voiceTimer)
 
         // Show fake loading screen 15s after locking, then every 60s
         let bsodTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in

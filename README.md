@@ -15,14 +15,22 @@ PrankLock is a **safe, open-source macOS menu-bar app** that turns an unlocked M
 |---------|:-----:|:-----:|:----:|
 | Warning overlay banner | ✅ | ✅ | ✅ |
 | Toast popups ("Nice try 👀") | ✅ | ✅ | ✅ |
-| Funny sound effects | ✅ | ✅ | ✅ |
+| Sound effects on every click & keypress (all apps) | ✅ | ✅ | ✅ |
 | App blocking (force-quit on launch) | ✅ | ✅ | ✅ |
-| Mouse cursor flees the pointer | ❌ | ✅ | ✅ |
-| Windows minimize on click | ❌ | ✅ | ✅ |
-| Keyboard scramble (injects random chars) | ❌ | ✅ | ✅ |
-| Random window teleporting | ❌ | ✅ | ✅ |
+| Mouse cursor flees the pointer (blocked apps only) | ❌ | ✅ | ✅ |
+| Windows minimize on click (blocked apps only) | ❌ | ✅ | ✅ |
+| Keyboard scramble toasts (all apps) | ❌ | ✅ | ✅ |
+| Clipboard hijack — paste returns a taunt | ❌ | ✅ | ✅ |
+| Random window teleporting (blocked apps only) | ❌ | ✅ | ✅ |
 | Windows bounce to new positions every 45s | ❌ | ✅ | ✅ |
+| Mac speaks taunts aloud every ~45s | ❌ | ❌ | ✅ |
 | Fake "macOS Update" loading screen | ❌ | ❌ | ✅ |
+
+### Prank targeting
+- **Sound + toast** fire on every click and keypress across **all apps** while locked
+- **Cursor flee, minimize, teleport** only trigger when clicking inside a **blocked app**
+- **Clipboard hijack** replaces clipboard text with a taunt on keypress (throttled to once every 5s)
+- **Voice taunts** — macOS `say` reads a line aloud every ~45s in Evil mode
 
 ### Security & smart features
 - **Auto-lock** after configurable inactivity period
@@ -35,6 +43,7 @@ PrankLock is a **safe, open-source macOS menu-bar app** that turns an unlocked M
 - Prank intensity: **Light / Chaos / Evil**
 - Custom prank messages (shown as toasts and in the overlay)
 - Blocked app list by Bundle ID
+- Per-slot sound picker — choose which system sound plays on click, keypress, and window bounce
 - Choose how many wrong attempts trigger real macOS lock
 
 ---
@@ -43,7 +52,6 @@ PrankLock is a **safe, open-source macOS menu-bar app** that turns an unlocked M
 - macOS 13 Ventura or later
 - **Accessibility permission** (for global mouse/keyboard monitoring and cursor warping)
 - **Automation permission** (for force-quitting blocked apps)
-- Optional: Camera permission for webcam snapshots on wrong passwords
 
 ---
 
@@ -60,8 +68,8 @@ open prank-lock
 ```bash
 cd prank-lock
 swift build -c release
-cp .build/release/PrankLock /Applications/PrankLock
-open /Applications/PrankLock
+cp -R .build/release/PrankLock.app ~/Applications/
+open ~/Applications/PrankLock.app
 ```
 
 ---
@@ -83,7 +91,6 @@ PrankLock will ask for:
 |-----------|-----|
 | Accessibility | Global event monitoring (mouse, keyboard) and cursor warping |
 | Automation | Force-quitting blocked apps |
-| Camera (optional) | Webcam snapshot on failed unlock attempt |
 
 You can grant these in **System Settings → Privacy & Security**.
 
@@ -100,7 +107,7 @@ PrankLock/
     ├── LockCoordinator.swift   # Orchestrates engine + blocker + inactivity
     ├── PrankEngine.swift       # All active prank behaviors
     ├── Pranks/
-    │   └── Sounds.swift        # NSSound wrappers
+    │   └── Sounds.swift        # NSSound wrappers + system sound scanner
     ├── Security/
     │   ├── AppBlocker.swift    # Force-quits blocked apps on launch
     │   └── InactivityWatcher.swift  # Auto-lock after idle
