@@ -72,6 +72,8 @@ final class PrankEngine {
     // before touching any state or UI.
 
     private func installEventMonitors() {
+        // Clicks only fire pranks when the clicked window belongs to a BLOCKED app.
+        // For non-blocked apps the intruder can use them normally — we just log it.
         let clickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] event in
@@ -81,37 +83,61 @@ final class PrankEngine {
 
         guard store.intensity == .chaos || store.intensity == .evil else { return }
 
+        // Cursor flee: throttled to one warp per 0.3s so it doesn't go insane
         let moveMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
-            DispatchQueue.main.async { self?.fleeCursor() }
+            DispatchQueue.main.async { self?.fleeCursorThrottled() }
         }
         if let m = moveMonitor { eventMonitors.append(m) }
 
+        // Keyboard toast: only fires once per 1.5s so it doesn't spam
         let keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] _ in
-            DispatchQueue.main.async { self?.scrambleResponse() }
+            DispatchQueue.main.async { self?.scrambleResponseThrottled() }
         }
         if let m = keyMonitor { eventMonitors.append(m) }
     }
 
     // MARK: - Gag dispatchers
 
+    // MARK: - Click handler
+
     private func handleClick(_ event: NSEvent) {
-        store.logAttempt("Mouse click detected")
+        let frontBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+        let isBlocked = store.blockedAppBundleIDs.contains(frontBundleID)
+
+        // Only go crazy if the click is inside a blocked app (or no apps are configured)
+        guard isBlocked || store.blockedAppBundleIDs.isEmpty else {
+            store.logAttempt("Click in allowed app: \(frontBundleID) — ignored")
+            return
+        }
+
+        store.logAttempt("Click in blocked/unprotected area")
         if !store.silentMode { Sounds.play(.denied) }
         showToast(store.randomMessage())
         if store.intensity == .chaos || store.intensity == .evil { minimizeFrontWindow() }
         if store.intensity == .evil { teleportRandomWindow() }
     }
 
-    private func fleeCursor() {
-        // Don't flee if the owner is holding the unlock combo
-        if comboWatcher?.isHoldingCombo == true { return }
+    // MARK: - Throttled cursor flee (chaos/evil only)
+
+    private var lastFlee: Date = .distantPast
+    private func fleeCursorThrottled() {
+        guard comboWatcher?.isHoldingCombo != true else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastFlee) >= 0.3 else { return }
+        lastFlee = now
         let screen = NSScreen.main?.frame ?? .zero
         let x = CGFloat.random(in: screen.minX + 50 ... screen.maxX - 50)
         let y = CGFloat.random(in: screen.minY + 50 ... screen.maxY - 50)
         CGWarpMouseCursorPosition(CGPoint(x: x, y: y))
     }
 
-    private func scrambleResponse() {
+    // MARK: - Throttled keyboard response (chaos/evil only)
+
+    private var lastScramble: Date = .distantPast
+    private func scrambleResponseThrottled() {
+        let now = Date()
+        guard now.timeIntervalSince(lastScramble) >= 1.5 else { return }
+        lastScramble = now
         let msgs = ["⌨️ Nice typing, wrong computer", "🚫 Keyboard disabled",
                     "🍩 Donuts denied", "❌ Access denied"]
         if !store.silentMode { Sounds.play(.alert) }
@@ -145,10 +171,19 @@ final class PrankEngine {
 
         guard store.intensity == .evil else { return }
 
-        let bsodTimer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
+        // Show fake loading screen 15s after locking, then every 60s
+        let bsodTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.store.isLocked else { return }
                 self.showFakeLoadingScreen()
+                // Repeat every 60s after first show
+                let repeat60 = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.store.isLocked else { return }
+                        self.showFakeLoadingScreen()
+                    }
+                }
+                self.timers.append(repeat60)
             }
         }
         timers.append(bsodTimer)
@@ -158,8 +193,10 @@ final class PrankEngine {
 
     func showToast(_ message: String) {
         guard let screen = NSScreen.main else { return }
-        let w: CGFloat = 380, h: CGFloat = 64
-        let frame = NSRect(x: screen.frame.midX - w / 2, y: screen.frame.minY + 80,
+        let w: CGFloat = 560, h: CGFloat = 110
+        // Center horizontally, 35% from bottom so it's very visible
+        let frame = NSRect(x: screen.frame.midX - w / 2,
+                           y: screen.frame.minY + screen.frame.height * 0.35,
                            width: w, height: h)
         let toast = NSWindow(contentRect: frame, styleMask: [.borderless],
                              backing: .buffered, defer: false)

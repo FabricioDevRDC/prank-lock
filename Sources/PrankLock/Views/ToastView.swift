@@ -3,22 +3,31 @@ import SwiftUI
 struct ToastView: View {
     let message: String
     @State private var opacity: Double = 0
+    @State private var scale: Double = 0.85
 
     var body: some View {
         Text(message)
-            .font(.system(size: 17, weight: .semibold))
+            .font(.system(size: 28, weight: .bold, design: .rounded))
             .foregroundStyle(.white)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 36)
+            .padding(.vertical, 22)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.black.opacity(0.85))
-                    .shadow(radius: 12)
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color.black.opacity(0.88))
+                    .shadow(color: .black.opacity(0.4), radius: 24, x: 0, y: 8)
             )
             .opacity(opacity)
+            .scaleEffect(scale)
             .onAppear {
-                withAnimation(.easeIn(duration: 0.25)) { opacity = 1 }
-                withAnimation(.easeOut(duration: 0.5).delay(2.0)) { opacity = 0 }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                    opacity = 1
+                    scale = 1
+                }
+                withAnimation(.easeOut(duration: 0.4).delay(2.2)) {
+                    opacity = 0
+                    scale = 0.9
+                }
             }
     }
 }
