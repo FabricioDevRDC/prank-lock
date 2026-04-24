@@ -117,11 +117,12 @@ final class PrankEngine {
         if store.intensity == .evil { teleportRandomWindow() }
     }
 
-    // MARK: - Throttled cursor flee (chaos/evil only)
+    // MARK: - Throttled cursor flee (chaos/evil, blocked app only)
 
     private var lastFlee: Date = .distantPast
     private func fleeCursorThrottled() {
         guard comboWatcher?.isHoldingCombo != true else { return }
+        guard isBlockedAppActive() else { return }
         let now = Date()
         guard now.timeIntervalSince(lastFlee) >= 0.3 else { return }
         lastFlee = now
@@ -131,10 +132,11 @@ final class PrankEngine {
         CGWarpMouseCursorPosition(CGPoint(x: x, y: y))
     }
 
-    // MARK: - Throttled keyboard response (chaos/evil only)
+    // MARK: - Throttled keyboard response (chaos/evil, blocked app only)
 
     private var lastScramble: Date = .distantPast
     private func scrambleResponseThrottled() {
+        guard isBlockedAppActive() else { return }
         let now = Date()
         guard now.timeIntervalSince(lastScramble) >= 1.5 else { return }
         lastScramble = now
@@ -142,6 +144,13 @@ final class PrankEngine {
                     "🍩 Donuts denied", "❌ Access denied"]
         if !store.silentMode { Sounds.play(.alert) }
         showToast(msgs.randomElement()!)
+    }
+
+    // Returns true if the frontmost app is in the blocked list,
+    // OR if the blocked list is empty (block everything mode).
+    private func isBlockedAppActive() -> Bool {
+        let frontID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+        return store.blockedAppBundleIDs.isEmpty || store.blockedAppBundleIDs.contains(frontID)
     }
 
     // MARK: - Repeating gags
