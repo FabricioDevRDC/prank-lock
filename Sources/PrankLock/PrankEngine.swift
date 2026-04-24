@@ -111,7 +111,7 @@ final class PrankEngine {
         }
 
         store.logAttempt("Click in blocked/unprotected area")
-        if !store.silentMode { Sounds.play(.denied) }
+        playSlot(store.soundDenied)
         showToast(store.randomMessage())
         if store.intensity == .chaos || store.intensity == .evil { minimizeFrontWindow() }
         if store.intensity == .evil { teleportRandomWindow() }
@@ -142,7 +142,7 @@ final class PrankEngine {
         lastScramble = now
         let msgs = ["⌨️ Nice typing, wrong computer", "🚫 Keyboard disabled",
                     "🍩 Donuts denied", "❌ Access denied"]
-        if !store.silentMode { Sounds.play(.alert) }
+        playSlot(store.soundAlert)
         showToast(msgs.randomElement()!)
     }
 
@@ -254,6 +254,14 @@ final class PrankEngine {
                 win.animator().setFrameOrigin(NSPoint(x: x, y: y))
             }
         }
+        playSlot(store.soundBounce)
+    }
+
+    // MARK: - Sound helper
+
+    private func playSlot(_ soundID: String) {
+        guard !store.silentMode, !soundID.isEmpty else { return }
+        SoundPlayer.shared.play(named: soundID, from: store.availableSounds)
     }
 
     private func showFakeLoadingScreen() {

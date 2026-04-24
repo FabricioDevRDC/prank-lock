@@ -35,7 +35,7 @@ struct PreferencesView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .frame(minHeight: 160)
+            .frame(minHeight: 120)
 
             HStack {
                 TextField("Add message…", text: $newMessage)
@@ -46,9 +46,50 @@ struct PreferencesView: View {
             }
 
             Divider()
+
             Toggle("Silent mode — no sound effects", isOn: $store.silentMode)
+
+            if !store.silentMode {
+                Divider()
+                soundsSection
+            }
         }
         .padding()
+    }
+
+    private var soundsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("Sound Effects",
+                          "Scanned from /System/Library/Sounds and ~/Library/Sounds on this Mac.")
+
+            soundRow("On click / blocked app", slot: $store.soundDenied)
+            soundRow("On keyboard input",       slot: $store.soundAlert)
+            soundRow("On window bounce",        slot: $store.soundBounce)
+        }
+    }
+
+    private func soundRow(_ label: String, slot: Binding<String>) -> some View {
+        HStack {
+            Text(label)
+                .frame(width: 180, alignment: .leading)
+            Picker("", selection: slot) {
+                Text("None").tag("")
+                ForEach(store.availableSounds) { s in
+                    Text(s.displayName).tag(s.id)
+                }
+            }
+            .frame(width: 130)
+            Button {
+                if !slot.wrappedValue.isEmpty {
+                    SoundPlayer.shared.play(named: slot.wrappedValue, from: store.availableSounds)
+                }
+            } label: {
+                Image(systemName: "play.circle")
+            }
+            .buttonStyle(.borderless)
+            .disabled(slot.wrappedValue.isEmpty)
+            .help("Preview")
+        }
     }
 
     private func addMessage() {

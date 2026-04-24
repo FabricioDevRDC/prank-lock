@@ -81,6 +81,9 @@ private enum K {
     static let lockAfter      = "pl.lockAfterSeconds"
     static let alsoLockScreen = "pl.alsoLockScreen"
     static let combo          = "pl.combo"
+    static let soundDenied    = "pl.sound.denied"
+    static let soundAlert     = "pl.sound.alert"
+    static let soundBounce    = "pl.sound.bounce"
 }
 
 // MARK: - Store
@@ -92,39 +95,47 @@ final class PrankStore: ObservableObject {
     @Published var blockedAppBundleIDs: [String]
     @Published var silentMode: Bool
     @Published var lockAfterSeconds: Int
-    @Published var alsoLockScreen: Bool   // trigger macOS lock screen when PrankLock activates
+    @Published var alsoLockScreen: Bool
+
+    /// Sound IDs (filename without extension) chosen per slot. Empty = no sound.
+    @Published var soundDenied: String   // on click / blocked app
+    @Published var soundAlert: String    // on keyboard
+    @Published var soundBounce: String   // on window bounce
+
+    /// All sounds found on the system — populated once at init.
+    let availableSounds: [SystemSound]
 
     @Published var isLocked = false
     @Published var attemptLog: [AttemptEntry] = []
-
-    // Set to true by ComboUnlockWatcher while owner holds the combo
-    var ownerIsPresent = false
 
     private let ud = UserDefaults.standard
     private var cancellables = Set<AnyCancellable>()
 
     init() {
-        // Load persisted settings
-        intensity = PrankIntensity(rawValue: UserDefaults.standard.string(forKey: K.intensity) ?? "") ?? .chaos
-        customMessages = UserDefaults.standard.stringArray(forKey: K.messages) ?? [
-            "Nice try 👀",
-            "Step away from this Mac",
-            "Donuts denied 🍩",
-            "🚨 Boss is watching",
-            "Access denied, pal",
+        availableSounds = SoundScanner.scan()
+
+        intensity        = PrankIntensity(rawValue: UserDefaults.standard.string(forKey: K.intensity) ?? "") ?? .chaos
+        customMessages   = UserDefaults.standard.stringArray(forKey: K.messages) ?? [
+            "Nice try 👀", "Step away from this Mac",
+            "Donuts denied 🍩", "🚨 Boss is watching", "Access denied, pal",
         ]
         blockedAppBundleIDs = UserDefaults.standard.stringArray(forKey: K.blockedApps) ?? []
-        silentMode     = UserDefaults.standard.bool(forKey: K.silentMode)
+        silentMode       = UserDefaults.standard.bool(forKey: K.silentMode)
         lockAfterSeconds = UserDefaults.standard.integer(forKey: K.lockAfter)
-        alsoLockScreen = UserDefaults.standard.bool(forKey: K.alsoLockScreen)
+        alsoLockScreen   = UserDefaults.standard.bool(forKey: K.alsoLockScreen)
+        soundDenied      = UserDefaults.standard.string(forKey: K.soundDenied)  ?? "Basso"
+        soundAlert       = UserDefaults.standard.string(forKey: K.soundAlert)   ?? "Sosumi"
+        soundBounce      = UserDefaults.standard.string(forKey: K.soundBounce)  ?? "Funk"
 
-        // Persist on every change
-        $intensity          .dropFirst().sink { UserDefaults.standard.set($0.rawValue, forKey: K.intensity) }     .store(in: &cancellables)
-        $customMessages     .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.messages) }               .store(in: &cancellables)
-        $blockedAppBundleIDs.dropFirst().sink { UserDefaults.standard.set($0, forKey: K.blockedApps) }            .store(in: &cancellables)
-        $silentMode         .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.silentMode) }             .store(in: &cancellables)
-        $lockAfterSeconds   .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.lockAfter) }              .store(in: &cancellables)
-        $alsoLockScreen     .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.alsoLockScreen) }         .store(in: &cancellables)
+        $intensity          .dropFirst().sink { UserDefaults.standard.set($0.rawValue, forKey: K.intensity) }   .store(in: &cancellables)
+        $customMessages     .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.messages) }             .store(in: &cancellables)
+        $blockedAppBundleIDs.dropFirst().sink { UserDefaults.standard.set($0, forKey: K.blockedApps) }          .store(in: &cancellables)
+        $silentMode         .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.silentMode) }           .store(in: &cancellables)
+        $lockAfterSeconds   .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.lockAfter) }            .store(in: &cancellables)
+        $alsoLockScreen     .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.alsoLockScreen) }       .store(in: &cancellables)
+        $soundDenied        .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.soundDenied) }          .store(in: &cancellables)
+        $soundAlert         .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.soundAlert) }           .store(in: &cancellables)
+        $soundBounce        .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.soundBounce) }          .store(in: &cancellables)
     }
 
     // MARK: - Combo
