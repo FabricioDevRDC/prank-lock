@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+private extension CGFloat {
+    func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
+        Swift.max(range.lowerBound, Swift.min(self, range.upperBound))
+    }
+}
+
 // MARK: - Dock icon frame lookup via Accessibility API
 
 enum DockIconLocator {
@@ -15,24 +21,28 @@ enum DockIconLocator {
         let axDock = AXUIElementCreateApplication(dock.processIdentifier)
         var listVal: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axDock, kAXChildrenAttribute as CFString, &listVal) == .success,
-              let children = listVal as? [AXUIElement] else { return [] }
+              let topChildren = listVal as? [AXUIElement] else { return [] }
 
-        // The Dock has one AXList child that contains the app icons
-        guard let list = children.first else { return [] }
-        var itemsVal: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(list, kAXChildrenAttribute as CFString, &itemsVal) == .success,
-              let items = itemsVal as? [AXUIElement] else { return [] }
+        // Dock has multiple AXList children (apps area, persistent area, trash) — scan all
+        var allItems: [AXUIElement] = []
+        for child in topChildren {
+            var itemsVal: CFTypeRef?
+            if AXUIElementCopyAttributeValue(child, kAXChildrenAttribute as CFString, &itemsVal) == .success,
+               let items = itemsVal as? [AXUIElement] {
+                allItems.append(contentsOf: items)
+            }
+        }
 
         var result: [CGRect] = []
-        for item in items {
-            // Check URL attribute to match bundle ID
+        for item in allItems {
+            // kAXURLAttribute returns a CFURL which bridges to URL, not String
             var urlVal: CFTypeRef?
             AXUIElementCopyAttributeValue(item, kAXURLAttribute as CFString, &urlVal)
-            if let urlStr = urlVal as? String {
-                let url = URL(string: urlStr) ?? URL(fileURLWithPath: urlStr)
-                if let bid = Bundle(url: url)?.bundleIdentifier, bundleIDs.contains(bid) {
-                    if let frame = axFrame(of: item) { result.append(frame) }
-                }
+            if let url = urlVal as? URL,
+               let bid = Bundle(url: url)?.bundleIdentifier,
+               bundleIDs.contains(bid),
+               let frame = axFrame(of: item) {
+                result.append(frame)
             }
         }
         return result
@@ -41,17 +51,18 @@ enum DockIconLocator {
     private static func axFrame(of element: AXUIElement) -> CGRect? {
         var posVal: CFTypeRef?, sizeVal: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posVal) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeVal) == .success else { return nil }
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeVal) == .success,
+              let axPos = posVal, let axSize = sizeVal else { return nil }
         var pos = CGPoint.zero
         var size = CGSize.zero
-        // AXValue wraps CGPoint / CGSize
-        AXValueGetValue(posVal as! AXValue, .cgPoint, &pos)
-        AXValueGetValue(sizeVal as! AXValue, .cgSize, &size)
-        // AX uses top-left origin; convert to AppKit bottom-left
+        AXValueGetValue(axPos as! AXValue, .cgPoint, &pos)
+        AXValueGetValue(axSize as! AXValue, .cgSize, &size)
+        // AX uses top-left origin (same as CG); convert to AppKit bottom-left
         guard let screen = NSScreen.main else { return nil }
-        let flipped = CGRect(x: pos.x, y: screen.frame.height - pos.y - size.height,
-                             width: size.width, height: size.height)
-        return flipped
+        return CGRect(x: pos.x,
+                      y: screen.frame.height - pos.y - size.height,
+                      width: size.width,
+                      height: size.height)
     }
 }
 
@@ -164,21 +175,22 @@ final class DockShieldManager {
     }
 
     private func repelIfNeeded(cursor: CGPoint, frames: [CGRect]) {
+        // cursor is in AppKit coords (bottom-left origin)
+        guard let screen = NSScreen.main else { return }
         for frame in frames {
             let dist = distance(cursor, to: frame)
             guard dist < repelRadius else { continue }
-            // Push cursor away from icon center
             let center = CGPoint(x: frame.midX, y: frame.midY)
             let dx = cursor.x - center.x
             let dy = cursor.y - center.y
             let len = sqrt(dx * dx + dy * dy)
-            let norm = len > 1 ? (dx / len, dy / len) : (0.0, -1.0)
+            let norm: (CGFloat, CGFloat) = len > 1 ? (dx / len, dy / len) : (0.0, 1.0)
             let push: CGFloat = repelRadius + 20
-            let newX = center.x + norm.0 * push
-            let newY = center.y + norm.1 * push
-            // Convert AppKit → CG coordinates (CG has top-left origin)
-            let screenH = NSScreen.main?.frame.height ?? 0
-            CGWarpMouseCursorPosition(CGPoint(x: newX, y: screenH - newY))
+            // New position in AppKit coords
+            let newX = (center.x + norm.0 * push).clamped(to: 0...screen.frame.width)
+            let newY = (center.y + norm.1 * push).clamped(to: 0...screen.frame.height)
+            // CGWarpMouseCursorPosition uses CG coords (top-left origin)
+            CGWarpMouseCursorPosition(CGPoint(x: newX, y: screen.frame.height - newY))
             return
         }
     }
