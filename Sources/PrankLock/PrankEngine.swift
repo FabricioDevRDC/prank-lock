@@ -12,6 +12,7 @@ final class PrankEngine {
     // Strong refs so ARC doesn't free windows before we close them
     private var activeToasts: [NSWindow] = []
     private var fakeLoadingWindow: NSWindow?
+    private let dockShield = DockShieldManager()
 
     init(store: PrankStore) {
         self.store = store
@@ -35,6 +36,7 @@ final class PrankEngine {
         activeToasts = []
         fakeLoadingWindow?.close()
         fakeLoadingWindow = nil
+        dockShield.removeAllShields()
     }
 
     // MARK: - Overlay (Evil mode only — stealth otherwise)
@@ -82,9 +84,17 @@ final class PrankEngine {
 
         guard store.intensity == .chaos || store.intensity == .evil else { return }
 
-        // Cursor flee: throttled to one warp per 0.3s so it doesn't go insane
-        let moveMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
-            DispatchQueue.main.async { self?.fleeCursorThrottled() }
+        // Cursor flee + dock shield on mouse move
+        let moveMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.fleeCursorThrottled()
+                if self.store.intensity == .evil && !self.store.blockedAppBundleIDs.isEmpty {
+                    // CG cursor position has top-left origin; convert to AppKit bottom-left
+                    let cgPos = NSEvent.mouseLocation  // already in AppKit screen coords
+                    self.dockShield.handleMouseMove(cursor: cgPos, blockedBundleIDs: self.store.blockedAppBundleIDs)
+                }
+            }
         }
         if let m = moveMonitor { eventMonitors.append(m) }
 
