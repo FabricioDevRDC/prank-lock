@@ -1,17 +1,14 @@
-import AVFoundation
 import AppKit
 
 // MARK: - System sound scanner
 
 struct SystemSound: Identifiable, Hashable {
-    let id: String      // filename without extension, e.g. "Basso"
+    let id: String      // filename without extension e.g. "Basso"
     let url: URL
-
     var displayName: String { id }
 }
 
 enum SoundScanner {
-    /// All directories macOS uses for system alert sounds.
     private static let searchPaths: [String] = [
         "/System/Library/Sounds",
         "/Library/Sounds",
@@ -41,35 +38,27 @@ enum SoundScanner {
 
 final class SoundPlayer {
     static let shared = SoundPlayer()
-    private var players: [AVAudioPlayer] = []
+
+    // Keep strong refs so NSSound is alive while playing
+    private var playing: [NSSound] = []
 
     private init() {}
 
-    func play(url: URL) {
-        // Clean up finished players
-        players.removeAll { !$0.isPlaying }
-        do {
-            let p = try AVAudioPlayer(contentsOf: url)
-            p.volume = 1.0
-            p.prepareToPlay()
-            p.play()
-            players.append(p)   // keep strong ref until playback ends
-        } catch {
-            // Fallback to NSSound if AVAudioPlayer fails for any reason
-            NSSound(contentsOf: url, byReference: false)?.play()
-        }
-    }
-
     func play(named soundID: String, from library: [SystemSound]) {
+        guard !soundID.isEmpty else { return }
         guard let sound = library.first(where: { $0.id == soundID }) else { return }
         play(url: sound.url)
     }
-}
 
-// MARK: - Legacy enum shim (used internally in PrankEngine)
+    func play(url: URL) {
+        // Remove finished sounds
+        playing.removeAll { !$0.isPlaying }
 
-enum SoundSlot: String, CaseIterable {
-    case denied   // played on click / block
-    case alert    // played on keyboard
-    case bounce   // played on window bounce
+        // Load by file path — this works reliably in a non-sandboxed background app.
+        // NSSound(named:) requires a proper CoreAudio session that menu-bar apps don't get.
+        guard let sound = NSSound(contentsOf: url, byReference: false) else { return }
+        sound.volume = 1.0
+        sound.play()
+        playing.append(sound)
+    }
 }
