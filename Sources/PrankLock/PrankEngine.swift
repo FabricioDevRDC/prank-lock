@@ -20,7 +20,6 @@ final class PrankEngine {
     // MARK: - Lifecycle
 
     func start() {
-        showOverlay()
         installEventMonitors()
         scheduleRepeatingGags()
     }
@@ -104,6 +103,7 @@ final class PrankEngine {
     // MARK: - Click handler
 
     private func handleClick(_ event: NSEvent) {
+        showOverlay()
         store.logAttempt("Click detected")
         playSlot(store.soundDenied)
         showToast(store.randomMessage())
@@ -132,6 +132,7 @@ final class PrankEngine {
 
     private var lastScramble: Date = .distantPast
     private func scrambleResponseThrottled() {
+        showOverlay()
         let now = Date()
         guard now.timeIntervalSince(lastScramble) >= 1.5 else { return }
         lastScramble = now
