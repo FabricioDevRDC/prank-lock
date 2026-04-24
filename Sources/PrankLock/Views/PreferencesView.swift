@@ -1,45 +1,37 @@
 import SwiftUI
+import UniformTypeIdentifiers
+import AppKit
 
 struct PreferencesView: View {
     @ObservedObject var store: PrankStore
     @State private var newMessage = ""
     @State private var newBundleID = ""
+    @State private var isDropTargeted = false
 
     var body: some View {
         TabView {
-            messagesTab
-                .tabItem { Label("Messages", systemImage: "text.bubble") }
-
-            appsTab
-                .tabItem { Label("Blocked Apps", systemImage: "app.badge.minus") }
-
-            securityTab
-                .tabItem { Label("Security", systemImage: "shield") }
-
-            logTab
-                .tabItem { Label("Attempt Log", systemImage: "clock.arrow.circlepath") }
+            messagesTab .tabItem { Label("Messages",     systemImage: "text.bubble") }
+            appsTab     .tabItem { Label("Blocked Apps", systemImage: "app.badge.minus") }
+            securityTab .tabItem { Label("Security",     systemImage: "shield") }
+            logTab      .tabItem { Label("Attempt Log",  systemImage: "clock.arrow.circlepath") }
         }
         .padding()
-        .frame(width: 480, height: 480)
+        .frame(width: 500, height: 540)
     }
 
-    // MARK: - Messages tab
+    // MARK: - Messages
 
     private var messagesTab: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Custom Prank Messages")
-                .font(.headline)
-            Text("These show as toasts and in the overlay banner when someone touches your Mac.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            sectionHeader("Custom Prank Messages",
+                          "These pop up as toasts when someone touches your Mac while locked.")
 
             List(store.customMessages, id: \.self) { msg in
                 HStack {
                     Text(msg)
                     Spacer()
-                    Button { store.customMessages.removeAll { $0 == msg } } label: {
-                        Image(systemName: "minus.circle.fill").foregroundStyle(.red)
-                    }
+                    Button { store.customMessages.removeAll { $0 == msg } }
+                    label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }
                     .buttonStyle(.plain)
                 }
             }
@@ -48,93 +40,151 @@ struct PreferencesView: View {
             HStack {
                 TextField("Add message…", text: $newMessage)
                     .textFieldStyle(.roundedBorder)
-                Button("Add") {
-                    guard !newMessage.isEmpty else { return }
-                    store.customMessages.append(newMessage)
-                    newMessage = ""
-                }
-                .disabled(newMessage.isEmpty)
+                    .onSubmit { addMessage() }
+                Button("Add", action: addMessage)
+                    .disabled(newMessage.trimmingCharacters(in: .whitespaces).isEmpty)
             }
 
-            Toggle("Silent mode (no sounds)", isOn: $store.silentMode)
+            Divider()
+            Toggle("Silent mode — no sound effects", isOn: $store.silentMode)
         }
         .padding()
     }
 
-    // MARK: - Apps tab
+    private func addMessage() {
+        let m = newMessage.trimmingCharacters(in: .whitespaces)
+        guard !m.isEmpty else { return }
+        store.customMessages.append(m)
+        newMessage = ""
+    }
+
+    // MARK: - Blocked Apps
 
     private var appsTab: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Blocked App Bundle IDs")
-                .font(.headline)
-            Text("Launching these apps while PrankLock is active will instantly force-quit them.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            sectionHeader("Blocked Apps",
+                          "Drag apps from Finder. They are force-quit the moment they launch or are activated while locked.")
 
-            List(store.blockedAppBundleIDs, id: \.self) { bid in
-                HStack {
-                    Text(bid).font(.system(.body, design: .monospaced))
-                    Spacer()
-                    Button { store.blockedAppBundleIDs.removeAll { $0 == bid } } label: {
-                        Image(systemName: "minus.circle.fill").foregroundStyle(.red)
-                    }
-                    .buttonStyle(.plain)
+            ZStack {
+                dropZoneBackground
+                    .frame(minHeight: 180)
+
+                if store.blockedAppBundleIDs.isEmpty {
+                    emptyDropHint
+                } else {
+                    blockedAppList
                 }
             }
-            .frame(minHeight: 160)
+            .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
+
+            Divider()
 
             HStack {
-                TextField("com.example.App", text: $newBundleID)
+                TextField("or paste bundle ID — com.apple.Safari", text: $newBundleID)
                     .textFieldStyle(.roundedBorder)
-                Button("Add") {
-                    guard !newBundleID.isEmpty else { return }
-                    store.blockedAppBundleIDs.append(newBundleID)
-                    newBundleID = ""
-                }
-                .disabled(newBundleID.isEmpty)
+                    .font(.system(.body, design: .monospaced))
+                    .onSubmit { addBundleID() }
+                Button("Add", action: addBundleID)
+                    .disabled(newBundleID.trimmingCharacters(in: .whitespaces).isEmpty)
             }
 
-            Text("Tip: find bundle IDs with `osascript -e 'id of app \"AppName\"'` in Terminal.")
+            Text("Tip: find bundle IDs with  osascript -e 'id of app \"AppName\"'  in Terminal.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
         .padding()
     }
 
-    // MARK: - Security tab
+    private var dropZoneBackground: some View {
+        RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(
+                isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.3),
+                style: StrokeStyle(lineWidth: 2, dash: isDropTargeted ? [] : [6])
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isDropTargeted ? Color.accentColor.opacity(0.07) : Color.clear)
+            )
+    }
+
+    private var emptyDropHint: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "arrow.down.app")
+                .font(.system(size: 30))
+                .foregroundStyle(.secondary)
+            Text("Drop apps here")
+                .foregroundStyle(.secondary)
+                .font(.callout)
+        }
+    }
+
+    private var blockedAppList: some View {
+        List(store.blockedAppBundleIDs, id: \.self) { bid in
+            HStack(spacing: 10) {
+                appIcon(for: bid)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(appName(for: bid)).font(.body)
+                    Text(bid).font(.caption2).foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Button { store.blockedAppBundleIDs.removeAll { $0 == bid } }
+                label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }
+                .buttonStyle(.plain)
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func addBundleID() {
+        let bid = newBundleID.trimmingCharacters(in: .whitespaces)
+        guard !bid.isEmpty, !store.blockedAppBundleIDs.contains(bid) else { return }
+        store.blockedAppBundleIDs.append(bid)
+        newBundleID = ""
+    }
+
+    // MARK: - Security
 
     private var securityTab: some View {
         Form {
-            Section("Auto-lock") {
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Current unlock combo")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    let combo = store.unlockCombo
+                    Text(combo.isEmpty ? "Not set — activate PrankLock to record one" : combo.displayString)
+                        .font(.system(.body, design: .rounded).bold())
+                        .foregroundColor(combo.isEmpty ? .secondary : .primary)
+                    Text("Hold this combo for 2 seconds while locked to unlock silently.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: { Text("Unlock Combo") }
+
+            Section {
                 Stepper(
-                    "Auto-lock after \(store.lockAfterSeconds == 0 ? "never" : "\(store.lockAfterSeconds)s")",
+                    store.lockAfterSeconds == 0
+                        ? "Auto-lock: disabled"
+                        : "Auto-lock after \(store.lockAfterSeconds) seconds of inactivity",
                     value: $store.lockAfterSeconds,
                     in: 0...600,
                     step: 30
                 )
-            }
+                .help("Automatically activates PrankLock if the Mac is idle for this long.")
+            } header: { Text("Auto-lock") }
 
-            Section("Escalation") {
-                Stepper(
-                    store.realLockAfterFailures == 0
-                        ? "Real lock: disabled"
-                        : "Real lock after \(store.realLockAfterFailures) failed attempt(s)",
-                    value: $store.realLockAfterFailures,
-                    in: 0...10
-                )
-                Text("Triggers ⌘⌃Q macOS lock screen after N wrong passwords.")
+            Section {
+                Toggle("Also lock macOS screen when PrankLock activates", isOn: $store.alsoLockScreen)
+                Text("Triggers ⌘⌃Q alongside PrankLock so the login screen also appears.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-
-            Section("Webcam") {
-                Toggle("Snapshot on wrong password (requires Camera permission)", isOn: $store.snapshotOnFail)
-            }
+            } header: { Text("Screen Lock") }
         }
         .padding()
+        .formStyle(.grouped)
     }
 
-    // MARK: - Log tab
+    // MARK: - Attempt Log
 
     private var logTab: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -152,16 +202,64 @@ struct PreferencesView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(store.attemptLog) { entry in
-                    HStack {
+                    HStack(alignment: .top, spacing: 8) {
                         Text(entry.date.formatted(date: .omitted, time: .standard))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
-                            .frame(width: 80, alignment: .leading)
+                            .frame(width: 72, alignment: .leading)
                         Text(entry.action)
+                            .font(.callout)
                     }
                 }
             }
         }
         .padding()
+    }
+
+    // MARK: - Drag & drop
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                guard
+                    let data = item as? Data,
+                    let url  = URL(dataRepresentation: data, relativeTo: nil),
+                    url.pathExtension == "app"
+                else { return }
+
+                let bid = Bundle(url: url)?.bundleIdentifier
+                    ?? (NSDictionary(contentsOf: url.appendingPathComponent("Contents/Info.plist"))?["CFBundleIdentifier"] as? String)
+                guard let bundleID = bid else { return }
+
+                DispatchQueue.main.async {
+                    if !self.store.blockedAppBundleIDs.contains(bundleID) {
+                        self.store.blockedAppBundleIDs.append(bundleID)
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    // MARK: - Helpers
+
+    private func appName(for bundleID: String) -> String {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            .flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleName"] as? String }
+            ?? bundleID
+    }
+
+    private func appIcon(for bundleID: String) -> some View {
+        let icon: NSImage = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            .map { NSWorkspace.shared.icon(forFile: $0.path) }
+            ?? NSImage(systemSymbolName: "app.fill", accessibilityDescription: nil)!
+        return Image(nsImage: icon).resizable().frame(width: 28, height: 28)
+    }
+
+    private func sectionHeader(_ title: String, _ subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.headline)
+            Text(subtitle).font(.caption).foregroundStyle(.secondary)
+        }
     }
 }

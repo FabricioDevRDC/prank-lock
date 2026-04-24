@@ -1,6 +1,6 @@
 import Foundation
+import AppKit
 import Combine
-import CoreGraphics
 
 // MARK: - Intensity
 
@@ -12,12 +12,11 @@ enum PrankIntensity: String, CaseIterable, Codable, Identifiable {
 
     var description: String {
         switch self {
-        case .light: return "Gentle trolling — warnings + blocked apps"
-        case .chaos: return "Full chaos — cursor flee, windows bounce, scrambled keys"
-        case .evil:  return "Maximum prank — everything + fake OS crash screen"
+        case .light: return "Gentle — warnings + blocked apps"
+        case .chaos: return "Chaos — cursor flee, windows bounce"
+        case .evil:  return "Evil — everything + fake OS update screen"
         }
     }
-
     var emoji: String {
         switch self {
         case .light: return "😏"
@@ -27,7 +26,44 @@ enum PrankIntensity: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-// MARK: - Attempt Log
+// MARK: - Unlock Combo
+
+struct UnlockCombo {
+    var flags: NSEvent.ModifierFlags
+
+    static let empty = UnlockCombo(flags: [])
+
+    var isEmpty: Bool { relevant.isEmpty }
+
+    var relevant: NSEvent.ModifierFlags {
+        flags.intersection([.shift, .control, .option, .command])
+    }
+
+    var displayString: String {
+        guard !relevant.isEmpty else { return "—" }
+        var parts: [String] = []
+        if relevant.contains(.control) { parts.append("⌃ Control") }
+        if relevant.contains(.option)  { parts.append("⌥ Option") }
+        if relevant.contains(.command) { parts.append("⌘ Command") }
+        if relevant.contains(.shift)   { parts.append("⇧ Shift") }
+        return parts.joined(separator: " + ")
+    }
+
+    var symbols: String {
+        var s = ""
+        if relevant.contains(.control) { s += "⌃" }
+        if relevant.contains(.option)  { s += "⌥" }
+        if relevant.contains(.command) { s += "⌘" }
+        if relevant.contains(.shift)   { s += "⇧" }
+        return s
+    }
+
+    var rawValue: UInt { relevant.rawValue }
+    init(flags: NSEvent.ModifierFlags) { self.flags = flags }
+    init(rawValue: UInt) { self.flags = NSEvent.ModifierFlags(rawValue: rawValue) }
+}
+
+// MARK: - Attempt log
 
 struct AttemptEntry: Codable, Identifiable {
     var id = UUID()
@@ -35,77 +71,99 @@ struct AttemptEntry: Codable, Identifiable {
     var action: String
 }
 
+// MARK: - UserDefaults keys
+
+private enum K {
+    static let intensity      = "pl.intensity"
+    static let messages       = "pl.messages"
+    static let blockedApps    = "pl.blockedApps"
+    static let silentMode     = "pl.silentMode"
+    static let lockAfter      = "pl.lockAfterSeconds"
+    static let alsoLockScreen = "pl.alsoLockScreen"
+    static let combo          = "pl.combo"
+}
+
 // MARK: - Store
 
 @MainActor
 final class PrankStore: ObservableObject {
+    @Published var intensity: PrankIntensity
+    @Published var customMessages: [String]
+    @Published var blockedAppBundleIDs: [String]
+    @Published var silentMode: Bool
+    @Published var lockAfterSeconds: Int
+    @Published var alsoLockScreen: Bool   // trigger macOS lock screen when PrankLock activates
+
     @Published var isLocked = false
-    @Published var intensity: PrankIntensity = .chaos
-    @Published var customMessages: [String] = [
-        "Nice try 👀",
-        "Step away from this Mac",
-        "Donuts denied 🍩",
-        "🚨 Boss is watching",
-        "Access denied, pal",
-    ]
-    @Published var selectedMessages: Set<String> = []
-    @Published var blockedAppBundleIDs: [String] = []
-    @Published var silentMode = false
-    @Published var snapshotOnFail = false
-    @Published var lockAfterSeconds: Int = 0     // 0 = disabled
-    @Published var realLockAfterFailures: Int = 0 // 0 = disabled
     @Published var attemptLog: [AttemptEntry] = []
-    @Published var hotkey: String = "⌃⌥⌘L"
-    @Published var failureCount = 0
 
-    private let passwordKey = "pranklock.password"
+    // Set to true by ComboUnlockWatcher while owner holds the combo
+    var ownerIsPresent = false
 
-    var password: String {
-        get { UserDefaults.standard.string(forKey: passwordKey) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: passwordKey) }
+    private let ud = UserDefaults.standard
+    private var cancellables = Set<AnyCancellable>()
+
+    init() {
+        // Load persisted settings
+        intensity = PrankIntensity(rawValue: UserDefaults.standard.string(forKey: K.intensity) ?? "") ?? .chaos
+        customMessages = UserDefaults.standard.stringArray(forKey: K.messages) ?? [
+            "Nice try 👀",
+            "Step away from this Mac",
+            "Donuts denied 🍩",
+            "🚨 Boss is watching",
+            "Access denied, pal",
+        ]
+        blockedAppBundleIDs = UserDefaults.standard.stringArray(forKey: K.blockedApps) ?? []
+        silentMode     = UserDefaults.standard.bool(forKey: K.silentMode)
+        lockAfterSeconds = UserDefaults.standard.integer(forKey: K.lockAfter)
+        alsoLockScreen = UserDefaults.standard.bool(forKey: K.alsoLockScreen)
+
+        // Persist on every change
+        $intensity          .dropFirst().sink { UserDefaults.standard.set($0.rawValue, forKey: K.intensity) }     .store(in: &cancellables)
+        $customMessages     .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.messages) }               .store(in: &cancellables)
+        $blockedAppBundleIDs.dropFirst().sink { UserDefaults.standard.set($0, forKey: K.blockedApps) }            .store(in: &cancellables)
+        $silentMode         .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.silentMode) }             .store(in: &cancellables)
+        $lockAfterSeconds   .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.lockAfter) }              .store(in: &cancellables)
+        $alsoLockScreen     .dropFirst().sink { UserDefaults.standard.set($0, forKey: K.alsoLockScreen) }         .store(in: &cancellables)
     }
 
-    func lock(with pin: String) {
-        guard !pin.isEmpty else { return }
-        password = pin
-        failureCount = 0
+    // MARK: - Combo
+
+    var unlockCombo: UnlockCombo {
+        get { UnlockCombo(rawValue: ud.object(forKey: K.combo) as? UInt ?? 0) }
+        set { ud.set(newValue.rawValue, forKey: K.combo) }
+    }
+
+    // MARK: - Lock / Unlock
+
+    func lock(with combo: UnlockCombo) {
+        guard !combo.isEmpty else { return }
+        unlockCombo = combo
         isLocked = true
     }
 
-    func unlock(with attempt: String) -> Bool {
-        if attempt == password {
-            isLocked = false
-            failureCount = 0
-            return true
-        }
-        failureCount += 1
-        logAttempt("Wrong password attempt #\(failureCount)")
-        if realLockAfterFailures > 0, failureCount >= realLockAfterFailures {
-            triggerRealLock()
-        }
-        return false
+    func unlockWithCombo() {
+        isLocked = false
+        logAttempt("Unlocked by owner")
     }
 
+    // MARK: - Logging
+
     func logAttempt(_ action: String) {
-        let entry = AttemptEntry(date: Date(), action: action)
-        attemptLog.insert(entry, at: 0)
+        attemptLog.insert(AttemptEntry(date: Date(), action: action), at: 0)
         if attemptLog.count > 200 { attemptLog.removeLast() }
     }
 
     func randomMessage() -> String {
-        let pool = selectedMessages.isEmpty ? Set(customMessages) : selectedMessages
-        return pool.randomElement() ?? "Nice try 👀"
+        customMessages.randomElement() ?? "Nice try 👀"
     }
 
-    private func triggerRealLock() {
-        logAttempt("Real lock triggered after \(failureCount) failed attempts")
-        let src = CGEventSource(stateID: .hidSystemState)
-        // Send Command+Control+Q to trigger macOS lock screen
-        let keyDown = CGEvent(keyboardEventSource: src, virtualKey: 0x0C, keyDown: true)
-        let keyUp   = CGEvent(keyboardEventSource: src, virtualKey: 0x0C, keyDown: false)
-        keyDown?.flags = [.maskCommand, .maskControl]
-        keyUp?.flags   = [.maskCommand, .maskControl]
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+    // MARK: - macOS screen lock
+
+    func triggerRealLock() {
+        logAttempt("macOS screen lock triggered")
+        let script = "tell application \"System Events\" to key code 12 using {command down, control down}"
+        var err: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&err)
     }
 }

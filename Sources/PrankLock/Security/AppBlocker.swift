@@ -1,9 +1,8 @@
 import AppKit
-import Combine
 
-/// Watches for newly launched apps and force-quits any on the blocklist.
+/// Watches for apps launching or being activated and force-quits any on the blocklist.
 final class AppBlocker {
-    private var workspaceObserver: Any?
+    private var observers: [Any] = []
     private let store: PrankStore
 
     init(store: PrankStore) {
@@ -11,27 +10,38 @@ final class AppBlocker {
     }
 
     func start() {
-        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didLaunchApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] note in
-            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard self.store.isLocked else { return }
-                if self.store.blockedAppBundleIDs.contains(app.bundleIdentifier ?? "") {
-                    self.store.logAttempt("Blocked app launch: \(app.localizedName ?? app.bundleIdentifier ?? "unknown")")
-                    app.forceTerminate()
-                }
+        // Catch both: launch (fresh open) and activate (switch to already-open app)
+        let names: [NSNotification.Name] = [
+            NSWorkspace.didLaunchApplicationNotification,
+            NSWorkspace.didActivateApplicationNotification,
+        ]
+        for name in names {
+            let obs = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] note in
+                guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
+                        as? NSRunningApplication else { return }
+                Task { @MainActor [weak self] in self?.handle(app) }
             }
+            observers.append(obs)
         }
     }
 
     func stop() {
-        if let obs = workspaceObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(obs)
-            workspaceObserver = nil
+        observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        observers = []
+    }
+
+    // MARK: - Private
+
+    @MainActor
+    private func handle(_ app: NSRunningApplication) {
+        guard store.isLocked else { return }
+        guard store.blockedAppBundleIDs.contains(app.bundleIdentifier ?? "") else { return }
+        store.logAttempt("Blocked: \(app.localizedName ?? app.bundleIdentifier ?? "unknown")")
+        app.terminate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            if !app.isTerminated { app.forceTerminate() }
         }
     }
 }

@@ -1,25 +1,34 @@
 import AppKit
 import SwiftUI
+import ApplicationServices
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
-    var lockWindow: NSWindow?
     var store: PrankStore!
     var coordinator: LockCoordinator?
+    var openWindows: [NSWindow] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         store = PrankStore()
         NSApp.setActivationPolicy(.accessory)
         coordinator = LockCoordinator(store: store)
         buildMenuBar()
+        requestAccessibilityPermission()
     }
+
+    // MARK: - Accessibility
+
+    private func requestAccessibilityPermission() {
+        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
+        let _ = AXIsProcessTrustedWithOptions(options)
+    }
+
+    // MARK: - Menu bar
 
     func buildMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let btn = statusItem?.button {
-            btn.image = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "PrankLock")
-        }
-
+        statusItem?.button?.image = NSImage(systemSymbolName: "lock.fill",
+                                            accessibilityDescription: "PrankLock")
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Activate PrankLock…", action: #selector(openActivate), keyEquivalent: "L"))
         menu.addItem(.separator())
@@ -30,35 +39,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
 
+    func setMenuBarVisible(_ visible: Bool) {
+        if visible { if statusItem == nil { buildMenuBar() } }
+        else { statusItem = nil }
+    }
+
+    // MARK: - Windows
+
     @objc func openActivate() {
-        let win = makeHostingWindow(ActivateView(store: store), size: CGSize(width: 420, height: 320))
-        win.title = "Activate PrankLock"
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        lockWindow = win
+        let win = makeHostingWindow(
+            ActivateView(store: store,
+                         onActivated: { [weak self] in self?.setMenuBarVisible(false) },
+                         onDismiss:   { NSApp.keyWindow?.close() }),
+            size: CGSize(width: 440, height: 400),
+            title: "Activate PrankLock"
+        )
+        present(win)
     }
 
     @objc func openPrefs() {
-        let win = makeHostingWindow(PreferencesView(store: store), size: CGSize(width: 480, height: 540))
-        win.title = "PrankLock Preferences"
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        let win = makeHostingWindow(
+            PreferencesView(store: store),
+            size: CGSize(width: 480, height: 540),
+            title: "PrankLock Preferences"
+        )
+        present(win)
     }
 
     @objc func quit() { NSApp.terminate(nil) }
+
+    func handleUnlock() { setMenuBarVisible(true) }
+
+    private func present(_ win: NSWindow) {
+        openWindows.removeAll { !$0.isVisible }
+        openWindows.append(win)
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
 }
 
-func makeHostingWindow<V: View>(_ view: V, size: CGSize) -> NSWindow {
+// MARK: - Window factory
+
+func makeHostingWindow<V: View>(_ view: V, size: CGSize, title: String = "") -> NSWindow {
     let win = NSWindow(
         contentRect: NSRect(origin: .zero, size: size),
         styleMask: [.titled, .closable],
         backing: .buffered,
         defer: false
     )
+    win.title = title
     win.center()
     win.contentView = NSHostingView(rootView: view)
+    win.isReleasedWhenClosed = false
     return win
 }
+
+// MARK: - Entry point
 
 let delegate = AppDelegate()
 let app = NSApplication.shared
